@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>前后端分离科学计算器</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: linear-gradient(145deg, #e8f0ff, #f8fbff); color: #172033; }
+    main { width: min(94vw, 900px); margin: 40px auto; display: grid; grid-template-columns: minmax(300px, 390px) 1fr; gap: 24px; }
+    .card { padding: 22px; border: 1px solid rgba(255,255,255,.8); border-radius: 26px; background: rgba(255,255,255,.82); box-shadow: 0 24px 60px rgba(50,75,130,.16); }
+    h1, h2 { margin: 0 0 16px; }
+    h1 { font-size: 18px; color: #536078; }
+    h2 { font-size: 20px; }
+    .screen { min-height: 122px; padding: 18px; display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-end; overflow: hidden; border-radius: 18px; background: #172033; color: white; }
+    #expression { width: 100%; min-height: 25px; text-align: right; color: #aab6cc; overflow-wrap: anywhere; }
+    #result { margin-top: 6px; max-width: 100%; font-size: 36px; font-weight: 650; overflow-wrap: anywhere; }
+    #message { min-height: 20px; margin-top: 8px; color: #ff9ca8; font-size: 13px; }
+    .keys { margin-top: 16px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    button { min-height: 54px; border: 0; border-radius: 15px; background: #eef2f9; color: #24314b; font: inherit; font-size: 18px; font-weight: 650; cursor: pointer; }
+    button:hover { filter: brightness(.97); }
+    button:active { transform: scale(.96); }
+    .operator { background: #dce7ff; color: #245cc5; }
+    .danger { background: #ffe5e7; color: #c0394a; }
+    .equals { background: #3478f6; color: white; }
+    .zero { grid-column: span 2; }
+    .status { margin: 0 0 18px; font-size: 13px; color: #64718a; }
+    .status::before { content: "●"; margin-right: 6px; color: #31a36b; }
+    .status.offline::before { color: #d94a5a; }
+    #history { display: grid; gap: 10px; max-height: 590px; overflow: auto; }
+    .history-item { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 12px 14px; border-radius: 14px; background: #f2f5fa; }
+    .history-item strong { display: block; overflow-wrap: anywhere; }
+    .history-item time { color: #78849a; font-size: 12px; }
+    .delete { min-height: 38px; align-self: center; padding: 0 12px; background: #ffe5e7; color: #c0394a; font-size: 14px; }
+    .empty { color: #78849a; text-align: center; padding: 40px 0; }
+    @media (max-width: 720px) { main { grid-template-columns: 1fr; margin: 18px auto; } }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="card" aria-label="科学计算器">
+      <h1>SCIENTIFIC CALCULATOR</h1>
+      <div class="screen" aria-live="polite">
+        <div id="expression">0</div>
+        <div id="result">0</div>
+        <div id="message"></div>
+      </div>
+      <div class="keys">
+        <button class="danger" data-action="clear">AC</button><button data-action="backspace" aria-label="退格">⌫</button><button class="operator" data-value="(">(</button><button class="operator" data-value=")">)</button>
+        <button class="operator" data-value="sqrt(">√</button><button class="operator" data-value="^">xʸ</button><button class="operator" data-value="%">%</button><button class="operator" data-value="/">÷</button>
+        <button data-value="7">7</button><button data-value="8">8</button><button data-value="9">9</button><button class="operator" data-value="*">×</button>
+        <button data-value="4">4</button><button data-value="5">5</button><button data-value="6">6</button><button class="operator" data-value="-">−</button>
+        <button data-value="1">1</button><button data-value="2">2</button><button data-value="3">3</button><button class="operator" data-value="+">+</button>
+        <button class="zero" data-value="0">0</button><button data-value=".">.</button><button class="equals" data-action="calculate">=</button>
+      </div>
+    </section>
+    <section class="card">
+      <h2>计算历史</h2>
+      <p id="status" class="status">后端已连接</p>
+      <div id="history"><p class="empty">加载中…</p></div>
+    </section>
+  </main>
+  <script>
+    const API_BASE = 'http://127.0.0.1:8000';
+    const expressionEl = document.querySelector('#expression');
+    const resultEl = document.querySelector('#result');
+    const messageEl = document.querySelector('#message');
+    const historyEl = document.querySelector('#history');
+    const statusEl = document.querySelector('#status');
+    let expression = '';
+
+    function render() {
+      expressionEl.textContent = (expression || '0').replaceAll('sqrt', '√').replaceAll('*', '×').replaceAll('/', '÷');
+    }
+
+    function append(value) {
+      if (value === 'sqrt(' && /[\d.)]$/.test(expression)) expression += '*';
+      if (/^[\d.(]$/.test(value) && /[)]%$/.test(expression)) expression += '*';
+      expression += value;
+      messageEl.textContent = '';
+      render();
+    }
+
+    async function request(path, options) {
+      const response = await fetch(API_BASE + path, options);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || '请求失败');
+      return data;
+    }
+
+    async function calculate() {
+      if (!expression) return;
+      try {
+        const data = await request('/api/calculate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expression })
+        });
+        resultEl.textContent = data.result;
+        messageEl.textContent = '';
+        await loadHistory();
+      } catch (error) {
+        resultEl.textContent = '错误';
+        messageEl.textContent = error.message === 'Failed to fetch' ? '无法连接后端，请先启动 server.py' : error.message;
+      }
+    }
+
+    async function loadHistory() {
+      try {
+        const data = await request('/api/history');
+        statusEl.textContent = '后端已连接';
+        statusEl.classList.remove('offline');
+        historyEl.replaceChildren(...(data.history.length ? data.history.map(historyItem) : [emptyHistory()]));
+      } catch {
+        statusEl.textContent = '后端未连接';
+        statusEl.classList.add('offline');
+        historyEl.replaceChildren(emptyHistory('启动后端后将显示数据库记录'));
+      }
+    }
+
+    function historyItem(item) {
+      const article = document.createElement('article');
+      article.className = 'history-item';
+      const text = document.createElement('div');
+      const calculation = document.createElement('strong');
+      calculation.textContent = `${item.expression} = ${item.result}`;
+      const time = document.createElement('time');
+      time.textContent = new Date(item.created_at).toLocaleString();
+      text.append(calculation, time);
+      const button = document.createElement('button');
+      button.className = 'delete';
+      button.textContent = '删除';
+      button.addEventListener('click', () => deleteHistory(item.id));
+      article.append(text, button);
+      return article;
+    }
+
+    function emptyHistory(text = '暂无计算历史') {
+      const empty = document.createElement('p');
+      empty.className = 'empty';
+      empty.textContent = text;
+      return empty;
+    }
+
+    async function deleteHistory(id) {
+      try {
+        await request(`/api/history/${id}`, { method: 'DELETE' });
+        await loadHistory();
+      } catch (error) { messageEl.textContent = error.message; }
+    }
+
+    document.querySelector('.keys').addEventListener('click', event => {
+      const button = event.target.closest('button');
+      if (!button) return;
+      if (button.dataset.value) append(button.dataset.value);
+      if (button.dataset.action === 'clear') { expression = ''; resultEl.textContent = '0'; messageEl.textContent = ''; render(); }
+      if (button.dataset.action === 'backspace') { expression = expression.slice(0, -1); render(); }
+      if (button.dataset.action === 'calculate') calculate();
+    });
+
+    document.addEventListener('keydown', event => {
+      if (/^[\d.+\-*/^()%]$/.test(event.key)) append(event.key);
+      else if (event.key === 'Enter' || event.key === '=') calculate();
+      else if (event.key === 'Backspace') { expression = expression.slice(0, -1); render(); }
+      else if (event.key === 'Escape') { expression = ''; resultEl.textContent = '0'; render(); }
+    });
+
+    loadHistory();
+  </script>
+</body>
+</html>
